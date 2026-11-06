@@ -12,8 +12,11 @@ This notebook: (1) inspects the data, (2) builds one preprocessing + classifier 
 """
 
 # # Imports and settings
+!pip install streamlit
+import warnings
 from pathlib import Path
 import joblib                             # saves the trained model data to disk for use by app
+import streamlit as st
 
 # Data Visualization
 import matplotlib.pyplot as plt
@@ -43,7 +46,15 @@ from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 
+import sys, sklearn, pandas, numpy, matplotlib, seaborn, joblib, streamlit
+print(sys.version)
+for m in (sklearn, pandas, numpy, matplotlib, seaborn, joblib, streamlit):
+    print(f"{m.__name__.replace('sklearn', 'scikit-learn')}=={m.__version__}")
+
+HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+PROJECT = HERE.parent if HERE.name == "model" else HERE
 PROJECT = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+SAMPLE_CSV = HERE / "test_data.csv"
 DATA_FILE = PROJECT / "data" / "Social_media_impact_on_life.csv"
 DATA_FILE = "social-impact-classifier/data/Social_media_impact_on_life.csv"
 MODEL_DIR = PROJECT / "model"
@@ -58,353 +69,261 @@ ID_COL = "Student_ID"
 TARGET_CLASS_ORDER = ["Negative", "Neutral", "Beneficial"]
 FREQ_COL = "Social_Comparison_Frequency"
 FREQ_LEVELS = ["Never", "Rarely", "Sometimes", "Frequently", "Always"]
+NUMERIC_FEATURES = ["Age", "Daily_Usage_Hours", "Weekend_Extra_Hours", "Sleep_Duration_Hours",
+                    "Sleep_Quality_Score", "Late_Night_Usage", "Perceived_Stress_Score",
+                    "Mental_Health_Index", "Academic_Performance_GPA"]
+NOMINAL_FEATURES = ["Gender", "Academic_Level", "Primary_Platform", "Device_Type"]
+FEATURES = NUMERIC_FEATURES + NOMINAL_FEATURES + [FREQ_COL]
 
-# Plot Styling
-sns.set_theme(style='whitegrid', palette='muted')
-plt.rcParams['figure.dpi'] = 120
-
-def save_show(name: str) -> None:
-    plt.tight_layout()
-    plt.savefig(FIG_DIR / f"{name}.png", dpi=130)
-    plt.show()
-
-# Step 1 - Dataset description, Data Quality checks, EDA and clean-up
-## Target: `Overall_Impact` (Beneficial / Neutral / Negative)
-
-# 1. Load the data
-raw = pd.read_csv(DATA_FILE)
-print("Rows x columns:", raw.shape)
-print(raw.head().to_string())
-
-# 2. Dataset description
-print("\n---Column Data Types ---")
-print(raw.dtypes.to_string())
-
-n_rows, n_cols = raw.shape
-print(f"\nRows: {n_rows} | Columns: {n_cols} | Predictive features (minus ID and target): {n_cols - 2}")
-
-# 3. Data Quality Checks
-# # Missing Values
-print("\n--- Missing Values ---")
-miss = raw.isna().sum()
-print(miss[miss > 0].to_string() if miss.any() else "none")
-
-# # Duplicate Values
-print("\n--- Duplicate Values ---")
-print("Duplicate rows:", raw.duplicated().sum(), "| duplicate student ids:", raw[ID_COL].duplicated().sum())
-
-# # Outlier Detection - May need to remove - check later
-print("\n--- Outlier Detection (using IQR) ---")
-outlier_cols = [c for c in raw.select_dtypes(include=["number"]).columns if c != TARGET]
-for col in outlier_cols:
-    Q1  = raw[col].quantile(0.25)
-    Q3  = raw[col].quantile(0.75)
-    IQR = Q3 - Q1
-    lower = Q1 - 1.5 * IQR
-    upper = Q3 + 1.5 * IQR
-    n_out = ((raw[col] < lower) | (raw[col] > upper)).sum()
-    print(f'{col:<30} Q1={Q1:.1f}  Q3={Q3:.1f}  IQR={IQR:.1f}  '
-          f'Bounds=[{lower:.1f}, {upper:.1f}]  Outliers={n_out:,}')
-
-# # Impossible/ inaccurate values
-# # # Negative Age - invalid
-print(f'\nNegative age: ', (raw['Age'] < 0).sum())
-
-# # # Daily Usage Hours < 24 hours and > 0 hours - i.e. hours shouldn't be negative and not more than 24 hrs for dialy use.
-print(f'\nDaily Usage Limit < 24: ', (raw['Daily_Usage_Hours'] > 24).sum() | (raw['Daily_Usage_Hours'] < 0).sum())
-
-# # # Weekend_Extra_Hours - should not be negative
-print(f'\nWeekend_Extra_Hours < 0: ', (raw['Weekend_Extra_Hours'] < 0).sum())
-
-# # # Sleep_Duration_Hours > 0
-print(f'\nSleep_Duration_Hours < 0: ', (raw['Sleep_Duration_Hours'] < 0).sum())
-
-# # # Sleep_Quality_Score shoudl not be negative
-print(f'\nSleep_Quality_Score < 0: ', (raw['Sleep_Quality_Score'] < 0).sum())
-
-# # # Perceived_Stress_Score shoudl not be negative
-print(f'\nPerceived_Stress_Score < 0: ', (raw['Perceived_Stress_Score'] < 0).sum())
-
-# # # Mental_Health_Index shoudl not be negative
-print(f'\nMental_Health_Index < 0: ', (raw['Mental_Health_Index'] < 0).sum())
-
-# # # Academic_Performance_GPA > 0
-print(f'\nAcademic_Performance_GPA < 0: ', (raw['Academic_Performance_GPA'] < 0).sum())
-
-# 4. Target Distribution
-print("\n--- Target Distribution ---")
-dist = raw[TARGET].value_counts().reindex(TARGET_CLASS_ORDER)
-print(pd.DataFrame({"rows": dist, "share_%": (dist / dist.sum() * 100).round(2)}).to_string())
-plt.bar(dist.index, dist.values,color=['#34a4eb','#3480eb','#3452eb'], edgecolor='white', width=0.5)
-
-plt.title('Target Variable Distribution: Social Media Life Impact', fontsize=12)
-plt.xlabel('Overall Impact Category')
-plt.ylabel('No. of students impacted')
-save_show("01_target_distribution")
-
-# 4. Data Preprocessing
-##Grouping the columns by datatype (used by the model pipelines later)
-numeric_cols = [c for c in raw.select_dtypes(include=["number", "bool"]).columns if c != TARGET]
-nominal_cols = [c for c in raw.columns                      # every remaining text column
-                if c not in numeric_cols + [TARGET, ID_COL, FREQ_COL]]
-print("Numeric/binary :", numeric_cols)
-print("Nominal text   :", nominal_cols)
-print("Ordinal        :", [FREQ_COL], "->", FREQ_LEVELS)
-
-# # Numeric Data Summary
-print("\n--- Numeric Data Summary ---")
-print(raw[numeric_cols].describe().T.round(2).to_string(),"\n")
-
-# # Category values distribution
-for col in nominal_cols + [FREQ_COL]:
-    print(f"{col}: {raw[col].value_counts().to_dict()}")
-
-# 6. Exploratory Data Analysis (EDA)
-
-# # Target balance and missing values
-fig, axes = plt.subplots(1, 2, figsize=(10, 3.4))
-sns.barplot(x=dist.index, y=dist.values, hue=dist.index, palette="crest", legend=False, ax=axes[0])
-axes[0].set_title("Overall_Impact class counts")
-axes[0].set_xlabel("Category")
-
-miss_pct = (raw.isna().mean() * 100)[lambda s: s > 0]
-sns.barplot(x=miss_pct.index, y=miss_pct.values, color="#c9783a", ax=axes[1])
-axes[1].set_title("Missing values (%)")
-axes[1].tick_params(axis="x", rotation=20)
-axes[1].set_xlabel("Missing Value Columns")
-save_show("02_target_and_missing")
-
-# # EDA - distributions of numeric features
-plt_cols = [c for c in numeric_cols if raw[c].nunique() > 2]
-fig, axes = plt.subplots(3, 3, figsize=(12, 8))
-for ax, col in zip(axes.ravel(), plt_cols):
-    sns.histplot(raw[col].dropna(), kde=True, ax=ax, color="#3b7d8c")
-    ax.set_title(col, fontsize=10)
-    ax.set_xlabel("")
-for ax in axes.ravel()[len(plt_cols):]:
-    ax.axis("off")
-save_show("03_numeric_distributions")
-
-# # EDA - numeric features split by target class (which features separate the classes?)
-key_cols = ["Perceived_Stress_Score", "Mental_Health_Index", "Academic_Performance_GPA",
-            "Daily_Usage_Hours", "Sleep_Duration_Hours", "Sleep_Quality_Score"]
-key_cols = [c for c in key_cols if c in raw.columns]
-fig, axes = plt.subplots(2, 3, figsize=(12, 6))
-for ax, col in zip(axes.ravel(), key_cols):
-    sns.boxplot(data=raw, x=TARGET, y=col, order=TARGET_CLASS_ORDER, hue=TARGET, palette="crest",
-                legend=False, ax=ax)
-    ax.set_xlabel("")
-save_show("04_features_by_target")
-
-# # Correlation Heatmap for Numeric Features
-corr = raw[numeric_cols].corr()
-plt.figure(figsize=(8, 6))
-sns.heatmap(corr, annot=True, fmt=".2f", cmap="vlag", center=0, square=True, cbar_kws={"shrink": 0.7})
-plt.title("Correlation of numeric features")
-save_show("05_correlation_heatmap")
-
-# # Categorical features vs target (row-wise share of each class)
-fig, axes = plt.subplots(1, len(nominal_cols) + 1, figsize=(4 * (len(nominal_cols) + 1), 3.6))
-for ax, col in zip(axes, nominal_cols + [FREQ_COL]):
-    share = pd.crosstab(raw[col], raw[TARGET], normalize="index")[TARGET_CLASS_ORDER] * 100
-    if col == FREQ_COL:
-        share = share.reindex(FREQ_LEVELS)
-    share.plot(kind="bar", stacked=True, ax=ax, colormap="viridis", legend=False)
-    ax.set_title(col, fontsize=10)
-    ax.set_xlabel("")
-    ax.tick_params(axis="x", rotation=30)
-axes[0].legend(TARGET_CLASS_ORDER, fontsize=7)
-save_show("06_categoricals_vs_target")
-
-# 7. Clean-up
-fn_data = raw.copy()
-fn_data = fn_data.drop(columns=[ID_COL])                        # identifier, no predictive meaning
-fn_data["Late_Night_Usage"] = fn_data["Late_Night_Usage"].astype(int)   # True/False -> 1/0 (Boolean to binary int)
-
-# # Sanity ranges - reports problems, does not silently delete rows
-checks = {
-    "Age 10-60": fn_data["Age"].between(10, 60),
-    "Sleep hours 0-14": fn_data["Sleep_Duration_Hours"].between(0, 14),
-    "GPA 0-4 (or missing)": fn_data["Academic_Performance_GPA"].between(0, 4) | fn_data["Academic_Performance_GPA"].isna(),
+MODEL_FILES = {                       # dropdown label -> saved pipeline
+    "Logistic Regression": "logistic_regression.joblib",
+    "Decision Tree": "decision_tree.joblib",
+    "kNN": "knn.joblib",
+    "Naive Bayes": "naive_bayes.joblib",
+    "Support Vector Machine": "support_vector_machine.joblib",
 }
-for label, ok in checks.items():
-    print(f"{label:25s} violations: {(~ok).sum()}")
+MODEL_BLURB = {
+    "Logistic Regression": "Linear model on scaled features; fast and easy to interpret.",
+    "Decision Tree": "Rule-based splits; no scaling needed but prone to over-fitting.",
+    "kNN": "Classifies by the closest training students; sensitive to scaling and dimensions.",
+    "Naive Bayes": "Probabilistic model assuming features are independent given the class.",
+    "Support Vector Machine": "Finds the widest-margin boundary between classes.",
+}
 
-print("\nRemaining missing values (filled inside the model pipeline):")
-print(fn_data.isna().sum()[lambda s: s > 0].to_string())
-print("Remaining columns after clean-up:", fn_data.shape[1] - 1, "features + target")
+st.set_page_config(page_title="Screen-Time Impact Lab", page_icon="📱", layout="wide")
 
-# 8. Stratified train / test split
-X = fn_data.drop(columns=[TARGET])
-y = fn_data[TARGET]
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=TEST_FRACTION, stratify=y, random_state=SEED)
-print("Training Set:", X_train.shape, "| Test Set:", X_test.shape)
-print("Test set class counts:", y_test.value_counts().to_dict())
+# ----------------------------------------------------------------------------- helpers
+@st.cache_resource(show_spinner=False)
+def load_model(label: str):
+    return joblib.load(MODEL_DIR / MODEL_FILES[label])
 
-pd.concat([X_test, y_test], axis=1).to_csv(PROJECT / "test_data.csv", index=False)   # Test set needed by the app later
-print("\nSaved test_data.csv")
 
-# 9. Preprocessing & Model Eva;uation Functions (kept inside the pipeline so there is no train/test leakage)
-numeric_features = [c for c in numeric_cols if c in X.columns]   # numbers + the 0/1 late-night flag
-nominal_features = [c for c in nominal_cols if c in X.columns]
+@st.cache_data(show_spinner=False)
+def load_sample() -> pd.DataFrame | None:
+    return pd.read_csv(SAMPLE_CSV) if SAMPLE_CSV.exists() else None
 
-# # Preprocessor Pipeline Function
-def build_preprocessor() -> ColumnTransformer:
-    """Fresh (unfitted) preprocessing block; every model pipeline gets its own copy."""
-    return ColumnTransformer([
-        ("numeric", Pipeline([("fill_median", SimpleImputer(strategy="median")),
-                              ("scale", StandardScaler())]), numeric_features),
-        ("nominal", OneHotEncoder(handle_unknown="ignore", sparse_output=False), nominal_features),
-        ("ordinal", Pipeline([("order", OrdinalEncoder(categories=[FREQ_LEVELS])),
-                              ("scale", StandardScaler())]), [FREQ_COL]),
-    ])
 
-# # Model Evaluation Metric Function
-CLASS_LABELS = sorted(y.unique())            # alphabetical = column order of predict_proba
-def metrics(y_true, y_pred, y_proba) -> dict:
-    """The six metrics for model evaluation."""
-    return {
+def prepare(frame: pd.DataFrame):
+    """Align an uploaded file with the training format. Returns (clean_frame, problems, notes)."""
+    problems, notes = [], []
+    frame = frame.copy()
+    if "Student_ID" in frame.columns:
+        frame = frame.drop(columns="Student_ID")
+        notes.append("Ignored the Student_ID column.")
+
+    missing = [c for c in FEATURES if c not in frame.columns]
+    if missing:
+        return frame, [f"Missing required column(s): {', '.join(missing)}"], notes
+
+    # True/False (original Kaggle format) or 1/0 -> 1/0
+    late = frame["Late_Night_Usage"]
+    frame["Late_Night_Usage"] = late.astype(str).str.strip().str.lower().map(
+        {"true": 1, "false": 0, "1": 1, "0": 0, "1.0": 1, "0.0": 0, "yes": 1, "no": 0})
+    for col in NUMERIC_FEATURES:
+        frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    bad_late = frame["Late_Night_Usage"].isna().sum()
+    if bad_late:
+        problems.append(f"Late_Night_Usage has {bad_late} value(s) that are not True/False or 1/0.")
+
+    bad_freq = ~frame[FREQ_COL].isin(FREQ_LEVELS)
+    if bad_freq.any():
+        problems.append(f"{FREQ_COL} must be one of {FREQ_LEVELS}; found {bad_freq.sum()} invalid/blank value(s).")
+
+    blanks = frame[NUMERIC_FEATURES].isna().sum().sum()
+    if blanks:
+        notes.append(f"{int(blanks)} blank numeric cell(s) will be filled with the training median, as in training.")
+    return frame, problems, notes
+
+
+def six_metrics(y_true, y_pred, y_proba, classes) -> dict:
+    scores = {
         "Accuracy": accuracy_score(y_true, y_pred),
-        "AUC": roc_auc_score(y_true, y_proba, multi_class="ovr", average="macro", labels=CLASS_LABELS),
+        "AUC": np.nan,
         "Precision": precision_score(y_true, y_pred, average="macro", zero_division=0),
         "Recall": recall_score(y_true, y_pred, average="macro", zero_division=0),
         "F1": f1_score(y_true, y_pred, average="macro", zero_division=0),
         "MCC": matthews_corrcoef(y_true, y_pred),
     }
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            scores["AUC"] = roc_auc_score(y_true, y_proba, multi_class="ovr", average="macro", labels=list(classes))
+    except ValueError:                       # the uploaded file does not contain every class
+        pass
+    return scores
 
 
-# # Model Tuning and Evaluation Function
-CV = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
-RESULTS, BEST_PARAMS, FITTED = {}, {}, {}
+def fmt(value: float) -> str:
+    return "n/a" if pd.isna(value) else f"{value:.4f}"
 
-def tune_evaluate(name: str, classifier, param_grid) -> Pipeline:
-    """Grid-search on the training rows (scored by macro-F1), then evaluate once on the test rows."""
-    pipe = Pipeline([("prep", build_preprocessor()), ("clf", classifier)])
-    search = GridSearchCV(pipe, param_grid, scoring="f1_macro", cv=CV, n_jobs=-1, refit=True,
-                          error_score="raise")      # never let a failed fit pass silently as NaN
-    search.fit(X_train, y_train)
-    best = search.best_estimator_
 
-    row = metrics(y_test, best.predict(X_test), best.predict_proba(X_test))
-    row["CV macro-F1 (train)"] = search.best_score_
-    row["Train macro-F1"] = f1_score(y_train, best.predict(X_train), average="macro")
-    RESULTS[name] = row
-    BEST_PARAMS[name] = {k.replace("clf__", ""): v for k, v in search.best_params_.items()}
-    FITTED[name] = best
-    joblib.dump(best, MODEL_DIR / f"{name.lower().replace(' ', '_')}.joblib")
+# ----------------------------------------------------------------------------- sidebar
+with st.sidebar:
+    st.title("📱 Controls")
+    model_name = st.selectbox("1 · Choose a model", list(MODEL_FILES))
+    st.caption(MODEL_BLURB[model_name])
 
-    print(f"{name}\n  best params : {BEST_PARAMS[name]}")
-    print(f"  CV macro-F1 : {search.best_score_:.4f} | test macro-F1: {row['F1']:.4f} | test MCC: {row['MCC']:.4f}\n")
-    return best
+    st.markdown("**2 · Provide test data**")
+    upload = st.file_uploader("Upload a CSV", type="csv",
+                              help="Use test_data.csv from the repo, or any file with the same columns.")
+    use_sample = st.checkbox("Use the bundled test_data.csv", value=True, disabled=upload is not None)
+    pct_view = st.toggle("Confusion matrix as row %", value=False)
 
-# 10. Indvidual Model Tuning
-# # Model 1 - Logistic Regression
-## Linear model on scaled features. C is the inverse regularisation strength (smaller = stronger penalty).
-logreg = tune_evaluate(
-    "Logistic Regression",
-    LogisticRegression(max_iter=3000, random_state=SEED),
-    {"clf__C": [0.01, 0.1, 1, 10, 100]},
-)
+    st.divider()
+    with st.expander("Required columns"):
+        st.write(", ".join(FEATURES))
+        st.caption(f"Optional: {TARGET} (true labels, needed for metrics).")
 
-# # Model 2 - Decision Tree Classifier
-## Axis-aligned splits; needs no scaling. Depth and leaf size control over-fitting.
-tree = tune_evaluate(
-    "Decision Tree",
-    DecisionTreeClassifier(random_state=SEED),
-    {"clf__max_depth": [3, 4, 5, 6, 8, None],
-     "clf__min_samples_leaf": [1, 5, 10, 20],
-     "clf__criterion": ["gini", "entropy"]},
-)
+# ----------------------------------------------------------------------------- header + data
+st.title("Screen-Time Impact Lab")
+st.markdown("Does a student's social-media life help or hurt? Predict **Overall Impact** "
+            "(*Beneficial / Neutral / Negative*) and compare five classic classifiers on the same data.")
 
-# # Model 3 - K-Nearest Neighbour Classifier
-# Distance-based, so the scaling inside the pipeline matters. k, vote weighting and distance type are tuned.
-# algorithm is pinned to ball_tree: with text labels, recent scikit-learn versions crash in the automatic
-# brute-force path for (uniform weights + Manhattan distance) once there are ~20+ features.
-knn = tune_evaluate(
-    "kNN",
-    KNeighborsClassifier(algorithm="ball_tree"),
-    {"clf__n_neighbors": [3, 5, 9, 15, 25],
-     "clf__weights": ["uniform", "distance"],
-     "clf__p": [1, 2]},                       # 1 = Manhattan, 2 = Euclidean
-)
+if upload is not None:
+    source_df, source_label = pd.read_csv(upload), f"uploaded file “{upload.name}”"
+elif use_sample and load_sample() is not None:
+    source_df, source_label = load_sample(), "bundled test_data.csv"
+else:
+    source_df = None
 
-# # Model 4 - Naive Bayes (Gaussian)
-# Assumes features are independent given the class and Gaussian within each class.
-# var_smoothing adds a floor to the variances for numerical stability.
-nbayes = tune_evaluate(
-    "Naive Bayes",
-    GaussianNB(),
-    {"clf__var_smoothing": np.logspace(-9, -1, 9)},
-)
+tab_perf, tab_compare, tab_rows, tab_whatif = st.tabs(
+    ["📊 Performance", "🏁 Compare all models", "🔎 Predictions", "🧪 What-if student"])
 
-# # Model 5 - Support Vector Machine
-# probability=True is required so predict_proba (and therefore AUC) is available.
-svm = tune_evaluate(
-    "Support Vector Machine",
-    SVC(probability=True, random_state=SEED),
-    [{"clf__kernel": ["linear"], "clf__C": [0.1, 1, 10]},
-     {"clf__kernel": ["rbf"], "clf__C": [0.5, 1, 5, 10], "clf__gamma": ["scale", 0.01, 0.05]}],
-)
+model = load_model(model_name)
+classes = list(model.classes_)
 
-# 11. Model Evaluation Metrics
+if source_df is None:
+    for tab in (tab_perf, tab_compare, tab_rows):
+        with tab:
+            st.info("Upload a CSV or tick “Use the bundled test_data.csv” in the sidebar to begin.")
+    data = None
+else:
+    data, problems, notes = prepare(source_df)
+    if problems:
+        for tab in (tab_perf, tab_compare, tab_rows):
+            with tab:
+                st.error("Cannot score this file:\n\n- " + "\n- ".join(problems))
+        data = None
+    else:
+        with tab_perf:
+            st.caption(f"Data: {source_label} · {len(data):,} rows" + (" · " + " ".join(notes) if notes else ""))
 
-# # Comparison table - the six required metrics checked on the test rows
-table = pd.DataFrame(RESULTS).T
-table.index.name = "ML Model Name"
-metrics_table = table[["Accuracy", "AUC", "Precision", "Recall", "F1", "MCC"]].round(4)
-print(metrics_table.to_string())
-print("\nBest model per metric:")
-print(metrics_table.idxmax().to_string(), "\n")
+if data is not None:
+    X_in = data[FEATURES]
+    has_truth = TARGET in data.columns
+    unknown_labels = sorted(set(data[TARGET].dropna()) - set(classes)) if has_truth else []
+    if unknown_labels:
+        has_truth = False                    # cannot score labels the models were never trained on
+    pred = model.predict(X_in)
+    proba = model.predict_proba(X_in)
 
-# # Over-fitting check (train vs cross-validation vs test)
-print(table[["Train macro-F1", "CV macro-F1 (train)", "F1"]].round(4)
-      .rename(columns={"F1": "Test macro-F1"}).to_string())
+    # ------------------------------------------------------------------ tab 1: performance
+    with tab_perf:
+        if unknown_labels:
+            st.error(f"{TARGET} contains label(s) the models were never trained on: {unknown_labels}. "
+                     f"Expected: {TARGET_CLASS_ORDER}.")
+        elif not has_truth:
+            st.warning(f"No “{TARGET}” column in this file, so only predictions are available (see the Predictions tab).")
+        else:
+            truth = data[TARGET]
+            scores = six_metrics(truth, pred, proba, classes)
+            for col, (name, val) in zip(st.columns(6), scores.items()):
+                col.metric(name, fmt(val))
+            st.caption("Precision, Recall and F1 are macro-averaged; AUC is one-vs-rest (macro).")
 
-# # Bar chart of all six metrics
-long = metrics_table.reset_index().melt(id_vars="ML Model Name", var_name="Metric", value_name="Score")
-plt.figure(figsize=(10, 4))
-sns.barplot(data=long, x="Metric", y="Score", hue="ML Model Name", palette="crest")
-plt.ylim(0.70, 1.0)
-plt.title("Test-set metrics by model (y-axis starts at 0.70)")
-plt.legend(ncol=5, fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.12), frameon=False)
-save_show("07_bar_chart_of_metrics")
+            order = [c for c in TARGET_CLASS_ORDER if c in classes]
+            left, right = st.columns([1, 1.15])
+            with left:
+                st.subheader("Confusion matrix")
+                cm = confusion_matrix(truth, pred, labels=order)
+                shown = cm / np.clip(cm.sum(axis=1, keepdims=True), 1, None) * 100 if pct_view else cm
+                fig, ax = plt.subplots(figsize=(4.8, 3.9))
+                sns.heatmap(shown, annot=True, fmt=".1f" if pct_view else "d", cmap="mako_r", cbar=False,
+                            xticklabels=order, yticklabels=order, ax=ax)
+                ax.set_xlabel("Predicted")
+                ax.set_ylabel("Actual")
+                st.pyplot(fig)
+                plt.close(fig)
+            with right:
+                st.subheader("Classification report")
+                report = pd.DataFrame(classification_report(truth, pred, output_dict=True, zero_division=0)).T
+                report["support"] = report["support"].astype(int)
+                st.dataframe(report.round(3), width="stretch")
+                if "Negative" in report.index and report.loc["Negative", "support"] > 0:
+                    r = report.loc["Negative"]
+                    st.info(f"Rare class **Negative**: recall {r['recall']:.2f}, precision {r['precision']:.2f} "
+                            f"(only {int(r['support'])} rows), so it moves the macro scores the most.")
 
-# # Confusion matrices (counts) for all five models
-print("\nTest-set support:", y_test.value_counts().reindex(TARGET_CLASS_ORDER).to_dict())
-fig, axes = plt.subplots(1, 5, figsize=(20, 3.8))
-for ax, (name, mdl) in zip(axes, FITTED.items()):
-    cm = confusion_matrix(y_test, mdl.predict(X_test), labels=TARGET_CLASS_ORDER)
-    sns.heatmap(cm, annot=True, fmt="d", cmap="mako_r", cbar=False, ax=ax,
-                xticklabels=TARGET_CLASS_ORDER, yticklabels=TARGET_CLASS_ORDER)
-    ax.set_title(name, fontsize=10)
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
-save_show("08_confusion_matrices")
+    # ------------------------------------------------------------------ tab 2: compare
+    with tab_compare:
+        if not has_truth:
+            st.warning(f"A valid “{TARGET}” column is needed to compare models.")
+        else:
+            live = {}
+            for label in MODEL_FILES:
+                m = load_model(label)
+                live[label] = six_metrics(truth, m.predict(X_in), m.predict_proba(X_in), list(m.classes_))
+            board = pd.DataFrame(live).T
+            board.index.name = "ML Model Name"
+            st.subheader("All five models on this data")
+            st.dataframe(board.round(4).style.highlight_max(axis=0, color="#2e7d5b").format("{:.4f}"),
+                         width="stretch")
+            pick = st.selectbox("Chart a metric", list(board.columns), index=4)
+            fig2, ax2 = plt.subplots(figsize=(7.5, 3.2))
+            sns.barplot(x=board.index, y=board[pick], hue=board.index, palette="crest", legend=False, ax=ax2)
+            ax2.set_ylabel(pick)
+            ax2.set_xlabel("")
+            ax2.set_ylim(max(0, float(board[pick].min()) - 0.05), 1.0)
+            plt.setp(ax2.get_xticklabels(), rotation=15)
+            st.pyplot(fig2)
+            plt.close(fig2)
+            st.caption(f"Best on this file by {pick}: **{board[pick].idxmax()}**")
 
-# # Per-class classification reports
-for name, mdl in FITTED.items():
-    print(f"\n=================== {name} ===================")
-    print(classification_report(y_test, mdl.predict(X_test), digits=3, zero_division=0))
+    # ------------------------------------------------------------------ tab 3: predictions
+    with tab_rows:
+        out = data.copy()
+        out["Predicted_Impact"] = pred
+        for i, c in enumerate(classes):
+            out[f"P({c})"] = proba[:, i].round(3)
+        if has_truth:
+            out["Correct"] = out[TARGET] == out["Predicted_Impact"]
+            if st.checkbox("Show only misclassified rows"):
+                out = out[~out["Correct"]]
+        st.caption(f"{len(out):,} rows shown · model: {model_name}")
+        st.dataframe(out, width="stretch", height=380)
+        st.download_button("⬇️ Download predictions as CSV", out.to_csv(index=False).encode(),
+                           file_name="predictions.csv", mime="text/csv")
 
-# # One-vs-rest ROC curves per class (one panel per model)
-fig, axes = plt.subplots(1, 5, figsize=(20, 3.8), sharey=True)
-for ax, (name, mdl) in zip(axes, FITTED.items()):
-    proba = mdl.predict_proba(X_test)
-    for i, cls in enumerate(mdl.classes_):
-        fpr, tpr, _ = roc_curve((y_test == cls).astype(int), proba[:, i])
-        ax.plot(fpr, tpr, label=cls)
-    ax.plot([0, 1], [0, 1], "k--", lw=0.8)
-    ax.set_title(name, fontsize=10)
-    ax.set_xlabel("False positive rate")
-axes[0].set_ylabel("True positive rate")
-axes[0].legend(fontsize=8)
-save_show("09_roc_curves")
+# ----------------------------------------------------------------------------- tab 4: what-if (independent of uploads)
+with tab_whatif:
+    st.subheader("Try a single student")
+    ref = load_sample()
+    if ref is None or any(c not in ref.columns for c in FEATURES):
+        st.info("A valid test_data.csv (with all feature columns) is needed to set the input ranges for this tab.")
+    else:
+        st.caption(f"Adjust the inputs; the selected model ({model_name}) predicts the overall impact.")
+        c1, c2, c3 = st.columns(3)
+        values = {}
+        for i, col in enumerate(NUMERIC_FEATURES):
+            target_col = (c1, c2, c3)[i % 3]
+            s = ref[col].dropna()
+            if col == "Late_Night_Usage":
+                values[col] = int(target_col.checkbox("Late-night usage", value=bool(round(s.mean()))))
+            elif col in ("Age", "Sleep_Quality_Score"):
+                values[col] = target_col.slider(col.replace("_", " "), int(s.min()), int(s.max()), int(s.median()))
+            else:
+                values[col] = target_col.slider(col.replace("_", " "), float(s.min()), float(s.max()),
+                                                float(round(s.median(), 1)), step=0.1)
+        for i, col in enumerate(NOMINAL_FEATURES):
+            opts = sorted(ref[col].dropna().unique())
+            values[col] = (c1, c2, c3)[i % 3].selectbox(col.replace("_", " "), opts)
+        values[FREQ_COL] = c3.select_slider("Social comparison frequency", FREQ_LEVELS, value="Sometimes")
 
-# # Rare-class check - per-class recall for every model
-print(f"\n=================== Rare Class Check per Model ===================")
-per_class_recall = pd.DataFrame(
-    {n: recall_score(y_test, m.predict(X_test), labels=TARGET_CLASS_ORDER, average=None, zero_division=0)
-     for n, m in FITTED.items()}, index=TARGET_CLASS_ORDER).T.round(3)
-print(per_class_recall.to_string())
+        one = pd.DataFrame([values])[FEATURES]
+        probs = model.predict_proba(one)[0]
+        top = classes[int(np.argmax(probs))]
+        st.markdown(f"### Predicted impact: **{top}**")
+        chart = pd.Series(probs, index=classes).reindex([c for c in TARGET_CLASS_ORDER if c in classes])
+        st.bar_chart(chart, y_label="probability")
+        st.caption("Educational demo built on a survey dataset; not a diagnostic tool.")
 
