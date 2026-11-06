@@ -40,7 +40,7 @@ HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd(
 PROJECT = HERE.parent if HERE.name == "model" else HERE
 PROJECT = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
 DATA_FILE = PROJECT / "data" / "Social_media_impact_on_life.csv"
-DATA_FILE = "social-impact-classifier/data/Social_media_impact_on_life.csv"
+DATA_FILE = "data/Social_media_impact_on_life.csv"
 MODEL_DIR = PROJECT / "model"
 MODEL_DIR.mkdir(exist_ok=True)
 FIG_DIR = PROJECT / "figures"

@@ -12,7 +12,6 @@ This notebook: (1) inspects the data, (2) builds one preprocessing + classifier 
 """
 
 # # Imports and settings
-!pip install streamlit
 import warnings
 from pathlib import Path
 import joblib                             # saves the trained model data to disk for use by app
@@ -52,11 +51,9 @@ for m in (sklearn, pandas, numpy, matplotlib, seaborn, joblib, streamlit):
     print(f"{m.__name__.replace('sklearn', 'scikit-learn')}=={m.__version__}")
 
 HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
-PROJECT = HERE.parent if HERE.name == "model" else HERE
-PROJECT = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
-SAMPLE_CSV = HERE / "test_data.csv"
+PROJECT = HERE.parent if HERE.name == "model" else HERE      # always the repo root
 DATA_FILE = PROJECT / "data" / "Social_media_impact_on_life.csv"
-DATA_FILE = "social-impact-classifier/data/Social_media_impact_on_life.csv"
+SAMPLE_CSV = HERE / "test_data.csv"
 MODEL_DIR = PROJECT / "model"
 MODEL_DIR.mkdir(exist_ok=True)
 FIG_DIR = PROJECT / "figures"
