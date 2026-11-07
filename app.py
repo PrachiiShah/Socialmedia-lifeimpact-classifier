@@ -275,7 +275,7 @@ if data is not None:
             st.warning(f"No “{TARGET}” column in this file, so only predictions are available (see the Predictions tab).")
         else:
             truth = data[TARGET]
-            scores = six_metrics(truth, pred, proba, classes)
+            scores = metrics(truth, pred, proba, classes)
             for col, (name, val) in zip(st.columns(6), scores.items()):
                 col.metric(name, fmt(val))
             st.caption("Precision, Recall and F1 are macro-averaged; AUC is one-vs-rest (macro).")
@@ -316,7 +316,7 @@ if data is not None:
             live = {}
             for label in MODEL_FILES:
                 m = load_model(label)
-                live[label] = six_metrics(truth, m.predict(X_in), m.predict_proba(X_in), list(m.classes_))
+                live[label] = metrics(truth, m.predict(X_in), m.predict_proba(X_in), list(m.classes_))
             board = pd.DataFrame(live).T
             board.index.name = "ML Model Name"
             st.subheader("All five models on this data")
