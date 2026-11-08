@@ -1,54 +1,43 @@
 # # Imports and settings
 import html
 import json
-import warnings
-from pathlib import Path
-import joblib                             # saves the trained model data to disk for use by app
-import streamlit as st
 
-# Data Visualization
+import joblib                             # loads the pipelines saved by model/train.py
 import matplotlib.pyplot as plt
 import numpy as np
-
-# Data Manipulation
 import pandas as pd
-import seaborn as sns
+import sklearn
+import streamlit as st
+from sklearn.metrics import classification_report, confusion_matrix
 
-# Model Performance
-from sklearn.metrics import (accuracy_score, classification_report, confusion_matrix, f1_score,
-                             matthews_corrcoef, precision_score, recall_score, roc_auc_score,
-                             roc_curve)
+from model.meta_data import META_FILE, MODEL_DIR, SAMPLE_CSV     # paths only: the app never creates folders
+from model.scoring import metrics                                 # same metric code as train.py / evaluate.py
 
-import sys, sklearn, pandas, numpy, matplotlib, seaborn, joblib, streamlit
-print(sys.version)
-for m in (sklearn, pandas, numpy, matplotlib, seaborn, joblib, streamlit):
-    print(f"{m.__name__.replace('sklearn', 'scikit-learn')}=={m.__version__}")
+st.set_page_config(page_title="Social Media - Life Impact Analysis", page_icon="📱", layout="wide",
+                   initial_sidebar_state="collapsed")            # must be the first Streamlit call
 
-HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
-PROJECT = HERE.parent if HERE.name == "model" else HERE      # always the repo root
-DATA_FILE = PROJECT / "data" / "Social_media_impact_on_life.csv"
-SAMPLE_CSV = HERE / "test_data.csv"
-MODEL_DIR = PROJECT / "model"
-MODEL_DIR.mkdir(exist_ok=True)
+# # ------------------- everything about the data and models comes from run_meta.json -------------------
+if not META_FILE.exists():
+    st.error("model/run_meta.json not found. Run `python -m model.train` and commit the model/ folder.")
+    st.stop()
+META = json.loads(META_FILE.read_text())
 
-TARGET = "Overall_Impact"
-ID_COL = "Student_ID"
-TARGET_CLASS_ORDER = ["Negative", "Neutral", "Beneficial"]
-FREQ_COL = "Social_Comparison_Frequency"
-FREQ_LEVELS = ["Never", "Rarely", "Sometimes", "Frequently", "Always"]
-NUMERIC_FEATURES = ["Age", "Daily_Usage_Hours", "Weekend_Extra_Hours", "Sleep_Duration_Hours",
-                    "Sleep_Quality_Score", "Late_Night_Usage", "Perceived_Stress_Score",
-                    "Mental_Health_Index", "Academic_Performance_GPA"]
-NOMINAL_FEATURES = ["Gender", "Academic_Level", "Primary_Platform", "Device_Type"]
+TARGET = META["target"]
+ID_COL = META["id_col"]
+TARGET_CLASS_ORDER = META["class_display_order"]
+NUMERIC_FEATURES = META["features"]["numeric"]
+NOMINAL_FEATURES = META["features"]["nominal"]
+FREQ_COL, FREQ_LEVELS = next(iter(META["features"]["ordinal"].items()))
 FEATURES = NUMERIC_FEATURES + NOMINAL_FEATURES + [FREQ_COL]
+MODEL_FILES = {name: m["file"] for name, m in META["models"].items()}    # dropdown label -> saved pipeline
 
-MODEL_FILES = {                       # dropdown label -> saved pipeline
-    "Logistic Regression": "log_reg.joblib",
-    "Decision Tree": "decision_tree.joblib",
-    "kNN": "knn.joblib",
-    "Naive Bayes": "gaus_naive_bayes.joblib",
-    "Support Vector Machine": "svm.joblib",
-}
+missing_files = [f for f in MODEL_FILES.values() if not (MODEL_DIR / f).exists()]
+if missing_files:
+    st.error(f"Missing model file(s) in model/: {', '.join(missing_files)}. "
+             f"Run `python -m model.train` and commit the model/ folder.")
+    st.stop()
+TRAINED_WITH = META["versions"]["scikit-learn"]
+
 MODEL_BLURB = {
     "Logistic Regression": "Linear model on scaled features; fast and easy to interpret.",
     "Decision Tree": "Rule-based splits; no scaling needed but prone to over-fitting.",
@@ -57,9 +46,6 @@ MODEL_BLURB = {
     "Support Vector Machine": "Finds the widest-margin boundary between classes.",
 }
 
-st.set_page_config(page_title="Screen-Time Impact Lab", page_icon="📱", layout="wide")
-
-# # ----------------------------- App Design ------------------------------------------
 # --- presentation-only constants (design) ---
 LOW_CONF = 0.85                                   # threshold for the "highlight low confidence" option
 CLASS_COLOR = {"Negative": "#f43f5e", "Neutral": "#f59e0b", "Beneficial": "#10b981"}
@@ -68,8 +54,6 @@ METRIC_COLOR = {"Accuracy": "#6366f1", "AUC": "#6366f1", "Precision": "#3b82f6",
                 "Recall": "#06b6d4", "F1": "#a855f7", "MCC": "#10b981"}
 BRAND = "#4f46e5"
 
-st.set_page_config(page_title="Social Media - Life Impact Analysis", page_icon="📱", layout="wide",
-                   initial_sidebar_state="collapsed")
 
 THEME_CSS = """
 <style>
@@ -209,7 +193,7 @@ div[data-baseweb="tab-border"] { background-color: #e2e8f0; }
 st.markdown(THEME_CSS, unsafe_allow_html=True)
 
 
-# ---------------------- helpers -----------------------------------
+# ----------------------------------------------------------------------------- helpers
 @st.cache_resource(show_spinner=False)
 def load_model(label: str):
     return joblib.load(MODEL_DIR / MODEL_FILES[label])
@@ -224,9 +208,9 @@ def prepare(frame: pd.DataFrame):
     """The uploaded file should same as the training format. Returns (clean_frame, problems, notes)."""
     problems, notes = [], []
     frame = frame.copy()
-    if "Student_ID" in frame.columns:
-        frame = frame.drop(columns="Student_ID")
-        notes.append("Ignored the Student_ID column.")
+    if ID_COL in frame.columns:
+        frame = frame.drop(columns=ID_COL)
+        notes.append(f"Ignored the {ID_COL} column.")
 
     missing = [c for c in FEATURES if c not in frame.columns]
     if missing:
@@ -252,29 +236,21 @@ def prepare(frame: pd.DataFrame):
     return frame, problems, notes
 
 
-def metrics(y_true, y_pred, y_proba, classes) -> dict:
-    scores = {
-        "Accuracy": accuracy_score(y_true, y_pred),
-        "AUC": np.nan,
-        "Precision": precision_score(y_true, y_pred, average="macro", zero_division=0),
-        "Recall": recall_score(y_true, y_pred, average="macro", zero_division=0),
-        "F1": f1_score(y_true, y_pred, average="macro", zero_division=0),
-        "MCC": matthews_corrcoef(y_true, y_pred),
-    }
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            scores["AUC"] = roc_auc_score(y_true, y_proba, multi_class="ovr", average="macro", labels=list(classes))
-    except ValueError:                       # the uploaded file does not contain every class
-        pass
-    return scores
+@st.cache_data(show_spinner=False)
+def score_all(X: pd.DataFrame, y: pd.Series) -> pd.DataFrame:
+    """Metrics of every saved model on the same rows (cached, so toggles don't re-score five models)."""
+    rows = {}
+    for name in MODEL_FILES:
+        m = load_model(name)
+        rows[name] = metrics(y, m.predict(X), m.predict_proba(X), list(m.classes_))
+    return pd.DataFrame(rows).T
 
 
 def fmt(value: float) -> str:
     return "n/a" if pd.isna(value) else f"{value:.4f}"
 
 
-# -------------------------- html builders (design only) ------------------------------
+# ----------------------------------------------------------------------------- html builders (design only)
 def card_head(title: str, subtitle: str = "", badge: str = "") -> str:
     sub = f'<div class="card-sub">{html.escape(subtitle)}</div>' if subtitle else ""
     pill = f'<span class="pill">{html.escape(badge)}</span>' if badge else ""
@@ -313,7 +289,7 @@ def confusion_html(cell_text, order) -> str:
     return "".join(out)
 
 
-# ------------------------- header + hero ---------------------------------------
+# ----------------------------------------------------------------------------- header + hero
 st.markdown(
     '<div class="topbar"><div class="logo">🧠</div><div><div class="t1">Social Impact Intelligence</div>'
     '<div class="t2">Machine Learning Student Wellbeing Evaluator</div></div></div>'
@@ -325,8 +301,11 @@ st.markdown(
     '</div></div>',
     unsafe_allow_html=True,
 )
+if TRAINED_WITH != sklearn.__version__:
+    st.warning(f"The models were trained with scikit-learn {TRAINED_WITH} but this app runs {sklearn.__version__}; "
+               f"results may be unreliable. Pin scikit-learn=={TRAINED_WITH} in requirements.txt.")
 
-# --------------------------- 1 · provide test data ---------------------------------
+# ----------------------------------------------------------------------------- 1 · provide test data
 with st.container(key="card_data"):
     data_head = st.empty()                   # filled in once the data has been read (needs row count / notes)
     up_col, use_col = st.columns(2, vertical_alignment="center")
@@ -341,14 +320,16 @@ with st.container(key="card_data"):
         st.write(", ".join(FEATURES))
         st.caption(f"Optional: {TARGET} (true labels, needed for metrics).")
 
-# ----------------------------- 2 · classifier & display settings --------------------------
+# ----------------------------------------------------------------------------- 2 · classifier & display settings
 with st.container(key="card_controls"):
     st.markdown(step_head(2, "Classifier & Display Settings"), unsafe_allow_html=True)
     ctl_model, ctl_cm, ctl_low = st.columns(3)
     with ctl_model:
         st.markdown('<div class="lbl">1 · Choose a model</div>', unsafe_allow_html=True)
         model_name = st.selectbox("Choose a model", list(MODEL_FILES), label_visibility="collapsed")
-        st.caption(MODEL_BLURB[model_name])
+        st.caption(MODEL_BLURB.get(model_name, ""))
+        tuned = ", ".join(f"{k}={v}" for k, v in META["models"][model_name]["best_params"].items())
+        st.caption(f"Tuned parameters: {tuned}")
     with ctl_cm:
         st.markdown('<div class="lbl">Display options</div>', unsafe_allow_html=True)
         with st.container(key="box_cm"):
@@ -358,7 +339,7 @@ with st.container(key="card_controls"):
         with st.container(key="box_low"):
             low_conf = st.toggle(f"Highlight low confidence (<{LOW_CONF:.0%})", value=False)
 
-# -------------------------------- data --------------------------------------
+# ----------------------------------------------------------------------------- data
 if upload is not None:
     source_df, source_label = pd.read_csv(upload), f"uploaded file “{upload.name}”"
 elif use_sample and load_sample() is not None:
@@ -380,7 +361,7 @@ else:
 model = load_model(model_name)
 classes = list(model.classes_)
 
-# -------------------------------- predictions + metrics -----------------------------------
+# ----------------------------------------------------------------------------- predictions + metrics
 has_truth, unknown_labels, truth, scores = False, [], None, None
 if data is not None:
     X_in = data[FEATURES]
@@ -398,7 +379,7 @@ if scores is not None:                       # six metric cards, above the tabs
     st.markdown(metric_strip_html(scores), unsafe_allow_html=True)
     st.caption("Precision, Recall and F1 are macro-averaged; AUC is one-vs-rest (macro).")
 
-# ---------------------------------- tabs pack -------------------------------
+# ----------------------------------------------------------------------------- tabs
 tab_perf, tab_compare, tab_rows, tab_whatif = st.tabs(
     [":material/bar_chart: Performance", ":material/compare_arrows: Compare all models",
      ":material/table_rows: Predictions", ":material/tune: What-if student"])
@@ -415,7 +396,7 @@ elif problems:
             st.error("Cannot score this file:\n\n- " + "\n- ".join(problems))
 
 if data is not None:
-# ------------------------------ tab 1: performance ------------------------------------
+    # ------------------------------------------------------------------ tab 1: performance
     with tab_perf:
         if unknown_labels:
             st.error(f"{TARGET} contains label(s) the models were never trained on: {unknown_labels}. "
@@ -449,7 +430,7 @@ if data is not None:
                         st.info(f"Rare class **Negative**: recall {r['recall']:.2f}, precision {r['precision']:.2f} "
                                 f"(only {int(r['support'])} rows), so it moves the macro scores the most.")
 
-# ---------------------------------- tab 2: compare ----------------------------------------
+    # ------------------------------------------------------------------ tab 2: compare
     with tab_compare:
         if not has_truth:
             st.warning(f"A valid “{TARGET}” column is needed to compare models.")
@@ -457,11 +438,7 @@ if data is not None:
             with st.container(key="card_compare"):
                 st.markdown(card_head("Comparative classifier breakdown", "All five models on this data"),
                             unsafe_allow_html=True)
-                live = {}
-                for label in MODEL_FILES:
-                    m = load_model(label)
-                    live[label] = metrics(truth, m.predict(X_in), m.predict_proba(X_in), list(m.classes_))
-                board = pd.DataFrame(live).T
+                board = score_all(X_in, truth)
                 board.index.name = "ML Model Name"
                 st.dataframe(board.round(4).style.highlight_max(axis=0, color="#e0e7ff").format("{:.4f}"),
                              width="stretch")
@@ -482,7 +459,7 @@ if data is not None:
                 plt.close(fig2)
                 st.caption(f"Best on this file by {pick}: **{board[pick].idxmax()}**")
 
-# ------------------------- tab 3: predictions -----------------------------------
+    # ------------------------------------------------------------------ tab 3: predictions
     with tab_rows:
         out = data.copy()
         out["Predicted_Impact"] = pred
@@ -513,64 +490,60 @@ if data is not None:
                 st.dataframe(out, width="stretch", height=380)
         export_df = out
 
-# ------------------ tab 4: what-if (independent of uploads) -------------------------
+# ----------------------------------------------------------------------------- tab 4: what-if (independent of uploads)
 with tab_whatif:
-    ref = load_sample()
-    if ref is None or any(c not in ref.columns for c in FEATURES):
-        st.info("A valid test_data.csv (with all required feature columns) is needed to set the input ranges for this tab.")
-    else:
-        col_in, col_out = st.columns([7, 5])
-        with col_in:
-            with st.container(key="card_sim_in"):
-                st.markdown(card_head("Try a single student",
-                                      f"Adjust the inputs; the selected model ({model_name}) predicts the overall impact."),
-                            unsafe_allow_html=True)
-                c1, c2 = st.columns(2)
-                values = {}
-                for i, col in enumerate(NUMERIC_FEATURES):
-                    target_col = (c1, c2)[i % 2]
-                    s = ref[col].dropna()
-                    if col == "Late_Night_Usage":
-                        values[col] = int(target_col.checkbox("Late-night usage", value=bool(round(s.mean()))))
-                    elif col in ("Age", "Sleep_Quality_Score"):
-                        values[col] = target_col.slider(col.replace("_", " "), int(s.min()), int(s.max()), int(s.median()))
-                    else:
-                        values[col] = target_col.slider(col.replace("_", " "), float(s.min()), float(s.max()),
-                                                        float(round(s.median(), 1)), step=0.1)
-                for i, col in enumerate(NOMINAL_FEATURES):
-                    opts = sorted(ref[col].dropna().unique())
-                    values[col] = (c1, c2)[i % 2].selectbox(col.replace("_", " "), opts)
-                values[FREQ_COL] = c2.select_slider("Social comparison frequency", FREQ_LEVELS, value="Sometimes")
+    col_in, col_out = st.columns([7, 5])
+    with col_in:
+        with st.container(key="card_sim_in"):
+            st.markdown(card_head("Try a single student",
+                                  f"Adjust the inputs; the selected model ({model_name}) predicts the overall impact."),
+                        unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            values = {}
+            for i, col in enumerate(NUMERIC_FEATURES):
+                target_col = (c1, c2)[i % 2]
+                lo, hi = META["ranges"][col]                  # min/max seen in training
+                mid = META["medians"][col]                    # starting value
+                if col == "Late_Night_Usage":
+                    values[col] = int(target_col.checkbox("Late-night usage", value=bool(round(mid))))
+                elif col in ("Age", "Sleep_Quality_Score"):
+                    values[col] = target_col.slider(col.replace("_", " "), int(lo), int(hi), int(mid))
+                else:
+                    start = min(max(round(mid, 1), lo), hi)   # rounding must not push the default outside the range
+                    values[col] = target_col.slider(col.replace("_", " "), float(lo), float(hi), float(start), step=0.1)
+            for i, col in enumerate(NOMINAL_FEATURES):
+                values[col] = (c1, c2)[i % 2].selectbox(col.replace("_", " "), META["categories"][col])
+            values[FREQ_COL] = c2.select_slider("Social comparison frequency", FREQ_LEVELS, value="Sometimes")
 
-        one = pd.DataFrame([values])[FEATURES]
-        probs = model.predict_proba(one)[0]
-        top = classes[int(np.argmax(probs))]
-        with col_out:
-            with st.container(key="card_sim_out"):
-                tone = CLASS_COLOR.get(top, BRAND)
-                st.markdown(
-                    f'<div class="sim-result" style="background:{tone}1a;border:1px solid {tone}4d">'
-                    f'<div class="lbl">Predicted life impact</div>'
-                    f'<div class="sim-badge" style="background:{tone}">{CLASS_FACE.get(top, "")} {html.escape(str(top))}</div>'
-                    f'<div class="sim-conf-label">Confidence score</div>'
-                    f'<div class="sim-conf">{float(np.max(probs)):.1%}</div></div>',
-                    unsafe_allow_html=True)
-                chart = pd.Series(probs, index=classes).reindex([c for c in TARGET_CLASS_ORDER if c in classes])
-                st.bar_chart(chart, y_label="probability", color=BRAND, height=240)
-        st.caption("Educational demo built on a survey dataset; not a diagnostic tool.")
+    one = pd.DataFrame([values])[FEATURES]
+    probs = model.predict_proba(one)[0]
+    top = classes[int(np.argmax(probs))]
+    with col_out:
+        with st.container(key="card_sim_out"):
+            tone = CLASS_COLOR.get(top, BRAND)
+            st.markdown(
+                f'<div class="sim-result" style="background:{tone}1a;border:1px solid {tone}4d">'
+                f'<div class="lbl">Predicted life impact</div>'
+                f'<div class="sim-badge" style="background:{tone}">{CLASS_FACE.get(top, "")} {html.escape(str(top))}</div>'
+                f'<div class="sim-conf-label">Confidence score</div>'
+                f'<div class="sim-conf">{float(np.max(probs)):.1%}</div></div>',
+                unsafe_allow_html=True)
+            chart = pd.Series(probs, index=classes).reindex([c for c in TARGET_CLASS_ORDER if c in classes])
+            st.bar_chart(chart, y_label="probability", color=BRAND, height=240)
+    st.caption("Educational demo built on a survey dataset; not a diagnostic tool.")
 
-# ------------------------ Export Button ---------------------------------------
+# ----------------------------------------------------------------------------- export (bottom of the page)
 with st.container(key="card_export"):
     ex_title, ex_csv, ex_json = st.columns([3, 1.3, 1.5], vertical_alignment="center")
     ex_title.markdown(
         '<div class="card-title">Export analysis results</div>'
         '<div class="card-sub">Download the classified rows and a summary of the selected model’s metrics</div>',
         unsafe_allow_html=True)
-    ex_csv.download_btn(":material/table_view: Predictions (CSV)",
+    ex_csv.download_button(":material/table_view: Predictions (CSV)",
                            export_df.to_csv(index=False).encode() if export_df is not None else b"",
                            file_name="predictions.csv", mime="text/csv", disabled=export_df is None,
                            width="stretch")
-    smry = {
+    summary = {
         "model": model_name,
         "data_source": source_label,
         "rows": int(len(data)) if data is not None else 0,
@@ -578,6 +551,6 @@ with st.container(key="card_export"):
         "metrics": ({k: (None if pd.isna(v) else round(float(v), 4)) for k, v in scores.items()}
                     if scores is not None else None),
     }
-    ex_json.download_btn(":material/data_object: Model summary (JSON)", json.dumps(smry, indent=2).encode(),
+    ex_json.download_button(":material/data_object: Model summary (JSON)", json.dumps(summary, indent=2).encode(),
                             file_name="model_summary.json", mime="application/json", disabled=data is None,
                             width="stretch")
