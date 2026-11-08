@@ -18,7 +18,7 @@ st.set_page_config(page_title="Social Media - Life Impact Analysis", page_icon="
 
 # # ------------------- everything about the data and models comes from run_meta.json -------------------
 if not META_FILE.exists():
-    st.error("model/run_meta.json not found. Run `python -m model.train` and commit the model/ folder.")
+    st.error(f"Metadata file not found at: {META_FILE}. Run `python -m model.train` and commit the model/ folder.")
     st.stop()
 META = json.loads(META_FILE.read_text())
 

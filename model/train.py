@@ -147,8 +147,6 @@ def main() -> None:
     }
     META_FILE.write_text(json.dumps(meta, indent=2, default=to_builtin))
     print(f"Saved {len(fitted)} models and {META_FILE.name}")
-    print(f"Pin in requirements.txt: scikit-learn=={sklearn.__version__}  pandas=={pd.__version__}")
-
-
+    
 if __name__ == "__main__":      # required on Windows: GridSearchCV(n_jobs=-1) starts worker processes
     main()

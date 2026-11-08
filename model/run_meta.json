@@ -1,0 +1,212 @@
+{
+  "seed": 42,
+  "test_fraction": 0.2,
+  "versions": {
+    "python": "3.12.3",
+    "scikit-learn": "1.6.1",
+    "pandas": "2.2.3"
+  },
+  "target": "Overall_Impact",
+  "id_col": "Student_ID",
+  "classes": [
+    "Beneficial",
+    "Negative",
+    "Neutral"
+  ],
+  "class_display_order": [
+    "Negative",
+    "Neutral",
+    "Beneficial"
+  ],
+  "features": {
+    "numeric": [
+      "Age",
+      "Daily_Usage_Hours",
+      "Weekend_Extra_Hours",
+      "Sleep_Duration_Hours",
+      "Sleep_Quality_Score",
+      "Late_Night_Usage",
+      "Perceived_Stress_Score",
+      "Mental_Health_Index",
+      "Academic_Performance_GPA"
+    ],
+    "nominal": [
+      "Gender",
+      "Academic_Level",
+      "Primary_Platform",
+      "Device_Type"
+    ],
+    "ordinal": {
+      "Social_Comparison_Frequency": [
+        "Never",
+        "Rarely",
+        "Sometimes",
+        "Frequently",
+        "Always"
+      ]
+    }
+  },
+  "ranges": {
+    "Age": [
+      15.0,
+      26.0
+    ],
+    "Daily_Usage_Hours": [
+      0.9,
+      14.0
+    ],
+    "Weekend_Extra_Hours": [
+      0.0,
+      4.5
+    ],
+    "Sleep_Duration_Hours": [
+      3.0,
+      10.5
+    ],
+    "Sleep_Quality_Score": [
+      1.0,
+      5.0
+    ],
+    "Late_Night_Usage": [
+      0.0,
+      1.0
+    ],
+    "Perceived_Stress_Score": [
+      0.0,
+      40.0
+    ],
+    "Mental_Health_Index": [
+      32.0,
+      98.0
+    ],
+    "Academic_Performance_GPA": [
+      1.9,
+      4.0
+    ]
+  },
+  "medians": {
+    "Age": 19.0,
+    "Daily_Usage_Hours": 4.7,
+    "Weekend_Extra_Hours": 1.8,
+    "Sleep_Duration_Hours": 6.8,
+    "Sleep_Quality_Score": 3.0,
+    "Late_Night_Usage": 1.0,
+    "Perceived_Stress_Score": 13.0,
+    "Mental_Health_Index": 82.0,
+    "Academic_Performance_GPA": 3.46
+  },
+  "categories": {
+    "Gender": [
+      "Female",
+      "Male",
+      "Non-Binary",
+      "Prefer not to say"
+    ],
+    "Academic_Level": [
+      "High School",
+      "Postgraduate",
+      "Undergraduate"
+    ],
+    "Primary_Platform": [
+      "Instagram",
+      "LinkedIn",
+      "Reddit",
+      "Snapchat",
+      "TikTok",
+      "X (Twitter)",
+      "YouTube"
+    ],
+    "Device_Type": [
+      "Laptop/PC",
+      "Smartphone",
+      "Tablet"
+    ]
+  },
+  "models": {
+    "Logistic Regression": {
+      "file": "logistic_regression.joblib",
+      "best_params": {
+        "C": 10
+      },
+      "cv_macro_f1": 0.9514446012791021,
+      "train_macro_f1": 0.9847016807370674,
+      "test_metrics": {
+        "Accuracy": 0.9844444444444445,
+        "AUC": 0.9982473695323059,
+        "Precision": 0.9555801879642262,
+        "Recall": 0.9542569320821893,
+        "F1": 0.954772909127823,
+        "MCC": 0.9500253360589013
+      }
+    },
+    "Decision Tree": {
+      "file": "decision_tree.joblib",
+      "best_params": {
+        "criterion": "entropy",
+        "max_depth": null,
+        "min_samples_leaf": 1
+      },
+      "cv_macro_f1": 0.9054118271976475,
+      "train_macro_f1": 1.0,
+      "test_metrics": {
+        "Accuracy": 0.9722222222222222,
+        "AUC": 0.9650511088071799,
+        "Precision": 0.9134115764400493,
+        "Recall": 0.9518382254338942,
+        "F1": 0.9311204765699092,
+        "MCC": 0.9111896106298473
+      }
+    },
+    "kNN": {
+      "file": "knn.joblib",
+      "best_params": {
+        "n_neighbors": 5,
+        "p": 2,
+        "weights": "distance"
+      },
+      "cv_macro_f1": 0.875215065757223,
+      "train_macro_f1": 1.0,
+      "test_metrics": {
+        "Accuracy": 0.9277777777777778,
+        "AUC": 0.9691706417563419,
+        "Precision": 0.8662898683108776,
+        "Recall": 0.8097114733461398,
+        "F1": 0.8359157017183273,
+        "MCC": 0.7563221176390084
+      }
+    },
+    "Naive Bayes": {
+      "file": "naive_bayes.joblib",
+      "best_params": {
+        "var_smoothing": 0.1
+      },
+      "cv_macro_f1": 0.8711804808314534,
+      "train_macro_f1": 0.8715025448755108,
+      "test_metrics": {
+        "Accuracy": 0.93,
+        "AUC": 0.9869504357508129,
+        "Precision": 0.8311011389218352,
+        "Recall": 0.9187050768219868,
+        "F1": 0.8697200827850957,
+        "MCC": 0.7983450812218973
+      }
+    },
+    "Support Vector Machine": {
+      "file": "support_vector_machine.joblib",
+      "best_params": {
+        "C": 10,
+        "kernel": "linear"
+      },
+      "cv_macro_f1": 0.9616481413661436,
+      "train_macro_f1": 0.9895423875759625,
+      "test_metrics": {
+        "Accuracy": 0.9877777777777778,
+        "AUC": 0.9984593451517009,
+        "Precision": 0.9708080001897867,
+        "Recall": 0.9673553699960106,
+        "F1": 0.9689648476710472,
+        "MCC": 0.9606199063852783
+      }
+    }
+  }
+}
