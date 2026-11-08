@@ -116,7 +116,8 @@ def main() -> None:
         X, y, test_size=TEST_FRACTION, stratify=y, random_state=SEED)
     print("Training Set:", X_train.shape, "| Test Set:", X_test.shape)
     print("Test set class counts:", y_test.value_counts().to_dict())
-    pd.concat([X_test, y_test], axis=1).to_csv(SAMPLE_CSV, index=False)     # test set, used by evaluate.py and the app
+    pd.concat([X_test, y_test], axis=1).to_csv(S
+                                               AMPLE_CSV, index=False)     # test set, used by evaluate.py and the app
     print(f"\nSaved {SAMPLE_CSV.name}\n")
 
     numeric_features = [c for c in numeric_cols if c in X.columns]          # numbers + the 0/1 late-night flag
